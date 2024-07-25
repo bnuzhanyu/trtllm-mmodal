@@ -158,6 +158,13 @@ def parse_arguments():
         help=
         'N-way expert parallelism size for MOE, default is 1, which will do tp-only for MoE'
     )
+    parser.add_argument(
+        '--use_mmodal_embeddings',
+        type=int,
+        default=0,
+        help=
+        'add mmodal embedding as input'
+    )
     args = parser.parse_args()
     return args
 
@@ -206,7 +213,8 @@ def args_to_build_options(args):
         'embedding_sharding_dim': args.embedding_sharding_dim,
         'share_embedding_table': args.use_embedding_sharing,
         'disable_weight_only_quant_plugin':
-        args.disable_weight_only_quant_plugin
+        args.disable_weight_only_quant_plugin,
+        'use_mmodal_embeddings': args.use_mmodal_embeddings
     }
 
 
@@ -337,3 +345,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

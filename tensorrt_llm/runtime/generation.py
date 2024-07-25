@@ -470,6 +470,7 @@ class ModelConfig:
     state_size: int = 0
     state_dtype: str = ""
     gpu_weights_percent: float = 1.0
+    use_mmodal_embeddings: int = 0
 
 
 @dataclass
@@ -726,6 +727,8 @@ class GenerationSession(object):
         expected_tensor_names = []
         if self.mapping.is_first_pp_rank():
             expected_tensor_names += ['input_ids']
+            if model_config.use_mmodal_embeddings:
+                expected_tensor_names += ['mmodal_embeddings', 'input_id_mask', 'mmodal_embeddings_mask']
         else:
             expected_tensor_names += ['hidden_states_input']
 
@@ -947,6 +950,11 @@ class GenerationSession(object):
     @property
     def use_custom_all_reduce(self):
         return self._model_config.use_custom_all_reduce
+
+    @property
+    def use_mmodal_embeddings(self):
+        return self._model_config.use_mmodal_embeddings
+
 
     @property
     def profiler(self):
@@ -1355,6 +1363,19 @@ class GenerationSession(object):
             self.beam_hyps_is_done = None
 
         self.cross_qkv_reuse = None
+        
+        if self.use_mmodal_embeddings:
+            # 不支持beam search
+            self.new_mmodal_embeddings = torch.zeros([batch_size, self.hidden_size],
+                                          dtype=torch.float16,
+                                          device=self.device)
+            self.new_mmodal_embeddings_mask = torch.zeros((batch_size,), dtype=torch.float16, device=self.device)
+            self.new_input_id_mask = torch.ones((batch_size,), dtype=torch.float16, device=self.device)
+        else:
+            self.new_mmodal_embeddings = None
+            self.new_mmodal_embeddings_mask = None
+            self.new_input_id_mask = None
+
 
     def _tensor_dtype(self, name):
         # return torch dtype given tensor name for convenience
@@ -1707,7 +1728,12 @@ class GenerationSession(object):
             tasks: torch.Tensor = None,
             prompt_vocab_size: torch.Tensor = None,
             encoder_output: torch.Tensor = None,
-            encoder_input_lengths: torch.Tensor = None) -> List[RuntimeTensor]:
+            encoder_input_lengths: torch.Tensor = None,
+            mmodal_embeddings: torch.Tensor = None,
+            input_id_mask: torch.Tensor = None,
+            mmodal_embeddings_mask: torch.Tensor = None,
+            ) -> List[RuntimeTensor]:
+        
         tensors = {}
 
         def sym(x, name):
@@ -1949,6 +1975,13 @@ class GenerationSession(object):
             add_tensor(self.buffer['spec_decoding_generation_lengths'],
                        'spec_decoding_generation_lengths')
 
+        if self.use_mmodal_embeddings:
+            from loguru import logger
+            add_tensor(mmodal_embeddings, 'mmodal_embeddings')
+            add_tensor(input_id_mask, 'input_id_mask')
+            add_tensor(mmodal_embeddings_mask, 'mmodal_embeddings_mask')
+            logger.info('add_tensor')
+
         return tensors
 
     def _get_next_step_shape_buffer(
@@ -2023,6 +2056,14 @@ class GenerationSession(object):
             else:
                 add_tensor_with_shape(self.new_tokens, 'input_ids',
                                       input_ids_shape)
+
+            if self.use_mmodal_embeddings:
+                emb_shape = (batch_size * beam_width, self.hidden_size) \
+                            if self.remove_input_padding else (batch_size * beam_width, 1, self.hidden_size)
+                mask_shape = (batch_size * beam_width, self.hidden_size)
+                add_tensor_with_shape(self.new_mmodal_embeddings, 'mmodal_embeddings', emb_shape)
+                add_tensor_with_shape(self.new_mmodal_embeddings_mask, 'mmodal_embeddings_mask', mask_shape)
+                add_tensor_with_shape(self.new_input_id_mask, 'input_id_mask', mask_shape)
         else:
             add_tensor(hidden_states_input, 'hidden_states_input')
 
@@ -2708,6 +2749,16 @@ class GenerationSession(object):
                         beam_width=1)
                     cross_kv_cache_block_offsets = host_cross_kv_cache_block_offsets.to(
                         'cuda')
+            mmodal_embeddings = kwargs.get('mmodal_embeddings')
+            input_id_mask = kwargs.get('input_id_mask')
+            mmodal_embeddings_mask = kwargs.get('mmodal_embeddings_mask')
+
+            if mmodal_embeddings is not None:
+                from loguru import logger
+                logger.info(f'input_ids shape:{input_ids.shape}, {input_ids.dtype}')
+                logger.info(f'mmodal_embedding shape:{mmodal_embeddings.shape} {mmodal_embeddings.dtype}')
+                logger.info(f'input_id_mask shape:{input_id_mask.shape}, {input_id_mask.dtype}')
+                logger.info(f'mmodal_embeddings_mask shape:{mmodal_embeddings_mask.shape}, {mmodal_embeddings_mask.dtype}')
 
             ctx_tensors = self._get_context_shape_buffer(
                 input_ids, context_lengths, host_context_lengths, position_ids,
@@ -2716,7 +2767,11 @@ class GenerationSession(object):
                 host_kv_cache_block_offsets, cross_kv_cache_block_offsets,
                 host_cross_kv_cache_block_offsets, hidden_states,
                 prompt_embedding_table, tasks, prompt_vocab_size,
-                encoder_output, encoder_input_lengths)
+                encoder_output, encoder_input_lengths, 
+                mmodal_embeddings=mmodal_embeddings,
+                input_id_mask=input_id_mask,
+                mmodal_embeddings_mask=mmodal_embeddings_mask,
+                )
 
             context = self.runtime.ctx_context
             self.runtime._set_tensors(context, ctx_tensors)

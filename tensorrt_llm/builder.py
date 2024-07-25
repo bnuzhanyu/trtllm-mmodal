@@ -880,6 +880,14 @@ def build(model: PretrainedModel,
             prepare_input_args[
                 "max_encoder_input_len"] = build_config.max_encoder_input_len
 
+        try:
+            if model.config.use_mmodal_embeddings:
+                print(f"use mmodal embeddings {model.config.use_mmodal_embeddings}")
+                prepare_input_args["use_mmodal_embeddings"] = model.config.use_mmodal_embeddings
+        except AttributeError:
+            print(f"not use mmodal embeddings")
+            pass
+
         if model.config.architecture == "WhisperEncoder":
 
             prepare_input_args = {
