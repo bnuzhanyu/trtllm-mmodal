@@ -1366,11 +1366,11 @@ class GenerationSession(object):
         
         if self.use_mmodal_embeddings:
             # 不支持beam search
-            self.new_mmodal_embeddings = torch.zeros([batch_size, self.hidden_size],
+            self.new_mmodal_embeddings = torch.zeros([batch_size, 1, self.hidden_size],
                                           dtype=torch.float16,
                                           device=self.device)
-            self.new_mmodal_embeddings_mask = torch.zeros((batch_size,), dtype=torch.float16, device=self.device)
-            self.new_input_id_mask = torch.ones((batch_size,), dtype=torch.float16, device=self.device)
+            self.new_mmodal_embeddings_mask = torch.zeros((batch_size, 1), dtype=torch.float16, device=self.device)
+            self.new_input_id_mask = torch.ones((batch_size, 1), dtype=torch.float16, device=self.device)
         else:
             self.new_mmodal_embeddings = None
             self.new_mmodal_embeddings_mask = None
@@ -1798,6 +1798,10 @@ class GenerationSession(object):
 
         if self.mapping.is_first_pp_rank():
             add_tensor(input_ids, 'input_ids')
+            if self.use_mmodal_embeddings:
+                add_tensor(mmodal_embeddings, 'mmodal_embeddings')
+                add_tensor(input_id_mask, 'input_id_mask')
+                add_tensor(mmodal_embeddings_mask, 'mmodal_embeddings_mask')
         else:
             add_tensor(hidden_states_input, 'hidden_states_input')
 
@@ -1975,13 +1979,6 @@ class GenerationSession(object):
             add_tensor(self.buffer['spec_decoding_generation_lengths'],
                        'spec_decoding_generation_lengths')
 
-        if self.use_mmodal_embeddings:
-            from loguru import logger
-            add_tensor(mmodal_embeddings, 'mmodal_embeddings')
-            add_tensor(input_id_mask, 'input_id_mask')
-            add_tensor(mmodal_embeddings_mask, 'mmodal_embeddings_mask')
-            logger.info('add_tensor')
-
         return tensors
 
     def _get_next_step_shape_buffer(
@@ -2060,7 +2057,9 @@ class GenerationSession(object):
             if self.use_mmodal_embeddings:
                 emb_shape = (batch_size * beam_width, self.hidden_size) \
                             if self.remove_input_padding else (batch_size * beam_width, 1, self.hidden_size)
-                mask_shape = (batch_size * beam_width, self.hidden_size)
+                mask_shape = (batch_size * beam_width, ) \
+                            if self.remove_input_padding else (batch_size * beam_width, 1)
+                    
                 add_tensor_with_shape(self.new_mmodal_embeddings, 'mmodal_embeddings', emb_shape)
                 add_tensor_with_shape(self.new_mmodal_embeddings_mask, 'mmodal_embeddings_mask', mask_shape)
                 add_tensor_with_shape(self.new_input_id_mask, 'input_id_mask', mask_shape)
@@ -2752,13 +2751,6 @@ class GenerationSession(object):
             mmodal_embeddings = kwargs.get('mmodal_embeddings')
             input_id_mask = kwargs.get('input_id_mask')
             mmodal_embeddings_mask = kwargs.get('mmodal_embeddings_mask')
-
-            if mmodal_embeddings is not None:
-                from loguru import logger
-                logger.info(f'input_ids shape:{input_ids.shape}, {input_ids.dtype}')
-                logger.info(f'mmodal_embedding shape:{mmodal_embeddings.shape} {mmodal_embeddings.dtype}')
-                logger.info(f'input_id_mask shape:{input_id_mask.shape}, {input_id_mask.dtype}')
-                logger.info(f'mmodal_embeddings_mask shape:{mmodal_embeddings_mask.shape}, {mmodal_embeddings_mask.dtype}')
 
             ctx_tensors = self._get_context_shape_buffer(
                 input_ids, context_lengths, host_context_lengths, position_ids,

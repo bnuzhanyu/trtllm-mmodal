@@ -386,33 +386,28 @@ class ModelRunnerMixin:
                                    input_id_mask: List[torch.Tensor],
                                    mmodal_embeddings_mask: List[torch.Tensor],
                                    ):
-        """image_embedding, bs * [seq_len, emb_size] -> [bs, max_seq_len, emb_size]"""
-        #print(f'{len(image_embeddings)=}, {image_embedding_size=}', flush=True)
         if mmodal_embeddings is None:
             return {}
 
         if self.remove_input_padding:
-            mmodal_embeddings = torch.concat(mmodal_embeddings)
-            input_id_mask = torch.concat(input_id_mask)
-            mmodal_embeddings_mask = torch.concat(mmodal_embeddings_mask)
+            mmodal_embeddings = torch.concat(mmodal_embeddings).cuda()
+            input_id_mask = torch.concat(input_id_mask).cuda()
+            mmodal_embeddings_mask = torch.concat(mmodal_embeddings_mask).cuda()
         else:
             input_lengths = [x.size(0) for x in mmodal_embeddings]
             max_length = max(input_lengths)
-            emb_dtype = mmodal_embeddings[0][0,0].dtype
-            paddings = [torch.zeros((max_length - l, mmodal_embeddings), dtype=emb_dtype) for l in input_lengths]
+            hidden_size = mmodal_embeddings[0].size(1)
+            emb_dtype = mmodal_embeddings[0].dtype
+            paddings = [torch.zeros((max_length - l, hidden_size), dtype=emb_dtype) for l in input_lengths]
             mmodal_embeddings = [torch.cat([x, pad]) for x, pad in zip(mmodal_embeddings, paddings)]
             mmodal_embeddings = torch.stack(mmodal_embeddings).cuda()
 
-            mask_dtype = mmodal_embeddings_mask[0][0,0].dtype
+            mask_dtype = mmodal_embeddings_mask[0].dtype
             mask_padding = [torch.zeros((max_length - l,), dtype=mask_dtype) for l in input_lengths]
             input_id_mask = [torch.cat([x, pad]) for x, pad in zip(input_id_mask, mask_padding)]
             input_id_mask = torch.stack(input_id_mask).cuda()
             mmodal_embeddings_mask = [torch.cat([x, pad]) for x, pad in zip(mmodal_embeddings_mask, mask_padding)]
             mmodal_embeddings_mask = torch.stack(mmodal_embeddings_mask).cuda()
-
-        print(f'mmodal_embeddings shape:{mmodal_embeddings.shape}',
-            f'mmodal_embeddings_mask shape:{mmodal_embeddings_mask.shape}', 
-            flush=True)
 
         return {
             'mmodal_embeddings': mmodal_embeddings,
@@ -845,7 +840,6 @@ class ModelRunner(ModelRunnerMixin):
         )
 
         from loguru import logger
-        logger.info(f"input_ids shape: {batch_input_ids.shape}, input_lengths shape: {input_lengths}")
         
         outputs = self.session.decode(
             batch_input_ids,
