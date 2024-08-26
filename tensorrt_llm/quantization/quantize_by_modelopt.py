@@ -355,7 +355,8 @@ def quantize_and_export(*,
                         max_draft_len=None,
                         medusa_hidden_act=None,
                         medusa_model_dir=None,
-                        quant_medusa_head=None):
+                        quant_medusa_head=None,
+                        use_mmodal_embeddings=0):
     '''
         Load model from the model_dir, call Modelopt to quantize the model, and then export
         the quantized model as TRT-LLM checkpoint
@@ -463,6 +464,7 @@ def quantize_and_export(*,
             else:
                 tensorrt_llm_config["quantization"]["quant_algo"] = None
 
+        tensorrt_llm_config["use_mmodal_embeddings"] = use_mmodal_embeddings
         # HF uses rope_scaling while tensorrt_llm uses rotary_scaling
         if hasattr(
                 model.config,
