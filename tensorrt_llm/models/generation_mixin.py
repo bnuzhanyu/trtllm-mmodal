@@ -415,7 +415,8 @@ class GenerationMixin:
             max_draft_len=0,
             multiple_profiles: bool = False,
             streamingllm: bool = False,
-            opt_batch_size=None):
+            opt_batch_size=None,
+            **kwargs):
 
         enable_ctx_gen_opt_profiles = GenerationMixin.has_ctx_gen_opt_profiles(
             use_gpt_attention_plugin, use_gemm_plugin, remove_input_padding,
@@ -682,7 +683,72 @@ class GenerationMixin:
             spec_decoding_params = SpecDecodingParams(
                 spec_decoding_generation_lengths,
                 spec_decoding_position_offsets, spec_decoding_packed_mask)
+                # add image_embedding
+        
+        ## mmodal embedding
+        mmodal_embeddings = None
+        input_id_mask = None
+        mmodal_embeddings_mask = None
 
+        if mapping.is_first_pp_rank():
+            use_mmodal_embeddings = kwargs.get('use_mmodal_embeddings', False)
+            if use_mmodal_embeddings:
+                if remove_input_padding:
+                    print("-------dtype", dtype)
+                    mmodal_embeddings = Tensor(
+                        name='mmodal_embeddings',
+                        dtype=dtype,
+                        shape=[-1, hidden_size],
+                        dim_range=OrderedDict([
+                            ('num_tokens', num_tokens_range),
+                            ('hidden_size', [hidden_size])
+                        ]))
+
+                    input_id_mask = Tensor(
+                        name='input_id_mask',
+                        dtype=dtype,
+                        shape=[-1],
+                        dim_range=OrderedDict([
+                             ('num_tokens', num_tokens_range),
+                        ]))
+
+                    mmodal_embeddings_mask = Tensor(
+                        name='mmodal_embeddings_mask',
+                        dtype=dtype,
+                        shape=[-1],
+                        dim_range=OrderedDict([
+                            ('num_tokens', num_tokens_range),
+                        ]))
+                else:
+                    mmodal_embeddings = Tensor(
+                        name='mmodal_embeddings',
+                        dtype=dtype,
+                        shape=[-1, -1, hidden_size],
+                        dim_range=OrderedDict([
+                            ('batch_size_beam_width', bb_range),
+                            ('input_len', inlen_range),
+                            ('hidden_size', [hidden_size])
+                        ]))
+
+                    input_id_mask = Tensor(
+                        name='input_id_mask',
+                        dtype=dtype,
+                        shape=[-1, -1],
+                        dim_range=OrderedDict([
+                            ('batch_size_beam_width', bb_range),
+                            ('input_len', inlen_range),
+                        ]))
+
+                    mmodal_embeddings_mask = Tensor(
+                        name='mmodal_embeddings_mask',
+                        dtype=dtype,
+                        shape=[-1, -1],
+                        dim_range=OrderedDict([
+                            ('batch_size_beam_width', bb_range),
+                            ('input_len', inlen_range),
+                        ]))
+
+                
         basic_inputs = {
             'input_ids': input_ids,
             'hidden_states_input': hidden_states,
@@ -693,7 +759,10 @@ class GenerationMixin:
             'prompt_vocab_size': prompt_vocab_size,
             'lora_ranks': lora_ranks,
             'lora_weights_pointers': lora_weights_pointers,
-            'spec_decoding_params': spec_decoding_params
+            'spec_decoding_params': spec_decoding_params,
+            'mmodal_embeddings': mmodal_embeddings,
+            'input_id_mask': input_id_mask,
+            'mmodal_embeddings_mask': mmodal_embeddings_mask,
         }
 
         attention_inputs = self.prepare_attention_inputs(

@@ -509,7 +509,8 @@ class PretrainedModel(Module,
                        gather_context_logits: bool = False,
                        gather_generation_logits: bool = False,
                        lora_target_modules: List[str] = None,
-                       opt_batch_size: int = 0):
+                       opt_batch_size: int = 0,
+                       **kwargs):
         '''@brief: Prepare inputs Tensors for the model, the given sizes are used to determine the
             ranges of the dimensions of when using TRT dynamic shapes.
 
@@ -561,7 +562,8 @@ class PretrainedModel(Module,
             lora_target_modules=lora_target_modules,
             multiple_profiles=multiple_profiles,
             streamingllm=streamingllm,
-            opt_batch_size=opt_batch_size)
+            opt_batch_size=opt_batch_size,
+            **kwargs)
 
         result = {
             'input_ids':
@@ -615,6 +617,10 @@ class PretrainedModel(Module,
         if model_inputs['spec_decoding_params'] is not None:
             result['spec_decoding_params'] = model_inputs[
                 'spec_decoding_params']
+
+        for mmodal_keys in ('mmodal_embeddings', 'input_id_mask', 'mmodal_embeddings_mask'):
+            if model_inputs.get(mmodal_keys) is not None: 
+                result[mmodal_keys] = model_inputs[mmodal_keys]
 
         return result
 
@@ -687,7 +693,10 @@ class DecoderModelForCausalLM(PretrainedModel):
                 prompt_tasks: Optional[Tensor] = None,
                 prompt_vocab_size: Optional[Tensor] = None,
                 lora_params=None,
-                spec_decoding_params=None):
+                spec_decoding_params=None,
+                mmodal_embeddings: Optional[Tensor] = None,
+                input_id_mask: Optional[Tensor] = None,
+                mmodal_embeddings_mask: Optional[Tensor] = None):
         kwargs = {
             'input_ids': input_ids,
             'position_ids': position_ids,
@@ -706,6 +715,13 @@ class DecoderModelForCausalLM(PretrainedModel):
             kwargs['prompt_tasks'] = prompt_tasks
         if prompt_vocab_size is not None:
             kwargs['prompt_vocab_size'] = prompt_vocab_size
+        
+        if mmodal_embeddings is not None:
+            kwargs['mmodal_embeddings'] = mmodal_embeddings
+        if input_id_mask is not None:
+            kwargs['input_id_mask'] = input_id_mask
+        if mmodal_embeddings_mask is not None:
+            kwargs['mmodal_embeddings_mask'] = mmodal_embeddings_mask
 
         if spec_decoding_params is not None:
             kwargs['spec_decoding_params'] = spec_decoding_params

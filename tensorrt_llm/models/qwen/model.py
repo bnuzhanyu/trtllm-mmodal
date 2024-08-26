@@ -18,9 +18,10 @@ from typing import Optional
 from tensorrt_llm.lora_manager import LoraConfig, use_lora
 
 from ..._utils import pad_vocab_size
-from ...functional import Tensor, recv, send, sigmoid
+from ...functional import Tensor, recv, send, sigmoid, shape, concat, expand, mul
 from ...layers import (MLP, MOE, Attention, AttentionMaskType, ColumnLinear,
                        Embedding, GatedMLP, RmsNorm, RowLinear)
+from ..._common import default_net
 from ...module import Module
 from ..modeling_utils import (DecoderLayerList, DecoderModelForCausalLM,
                               PretrainedConfig)
@@ -182,7 +183,11 @@ class QWenModel(Module):
                 prompt_embedding_table: Optional[Tensor] = None,
                 prompt_tasks: Optional[Tensor] = None,
                 prompt_vocab_size: Optional[Tensor] = None,
-                lora_params=None):
+                lora_params=None,
+                mmodal_embeddings: Optional[Tensor] = None,
+                input_id_mask: Optional[Tensor] = None,
+                mmodal_embeddings_mask: Optional[Tensor] = None,
+                ):
 
         ptuning_args = [
             prompt_embedding_table, prompt_tasks, prompt_vocab_size
@@ -190,6 +195,30 @@ class QWenModel(Module):
 
         if self.mapping.is_first_pp_rank():
             hidden_states = self.vocab_embedding(input_ids, *ptuning_args)
+            # TODO: 把这一段抽象成函数
+            if mmodal_embeddings is not None:
+                assert mmodal_embeddings_mask is not None
+                assert input_id_mask is not None
+                print(f'mmodal embedding shape: {shape(mmodal_embeddings)}')
+                if default_net().plugin_config.remove_input_padding:
+                    input_len = shape(mmodal_embeddings, 0)
+                    hidden_size = shape(mmodal_embeddings, 1)
+                    input_id_mask = input_id_mask.view(concat([input_len, 1]))
+                    input_id_mask = expand(input_id_mask, concat([input_len, hidden_size]))
+                    mmodal_embeddings_mask = mmodal_embeddings_mask.view(concat([input_len, 1]))
+                    mmodal_embeddings_mask = expand(mmodal_embeddings_mask, concat([input_len, hidden_size]))
+                else:
+                    bs = shape(mmodal_embeddings, 0)
+                    input_len = shape(mmodal_embeddings, 1)
+                    hidden_size = shape(mmodal_embeddings, 2)
+                    input_id_mask = input_id_mask.view(concat([bs, input_len, 1]))
+                    input_id_mask = expand(input_id_mask, concat([bs, input_len, hidden_size]))
+                    mmodal_embeddings_mask = mmodal_embeddings_mask.view(concat([bs, input_len, 1]))
+                    mmodal_embeddings_mask = expand(mmodal_embeddings_mask, concat([bs, input_len, hidden_size]))          
+                hidden_states = mul(hidden_states, input_id_mask)
+                mmodal_embeddings = mul(mmodal_embeddings, mmodal_embeddings_mask)
+                hidden_states = hidden_states + mmodal_embeddings
+                print(f'hidden states shape: {shape(hidden_states)} {hidden_states.dtype}')
         else:
             hidden_states = recv(hidden_states, self.mapping.prev_pp_rank())
 

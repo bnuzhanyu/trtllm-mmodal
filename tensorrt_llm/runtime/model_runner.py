@@ -169,6 +169,7 @@ def _builder_to_model_config(config: dict) -> Tuple[ModelConfig, dict]:
         trtllm_modules_to_hf_modules=lora_trtllm_modules_to_hf_modules,
         num_medusa_heads=num_medusa_heads,
         max_medusa_tokens=max_medusa_token_len,
+        use_mmodal_embeddings=config['pretrained_config'].get('use_mmodal_embeddings', 0),
     )
 
     other_config = {
@@ -380,6 +381,41 @@ class ModelRunnerMixin:
             }
 
 
+    def _prepare_mmodal_embeddings(self, 
+                                   mmodal_embeddings: List[torch.Tensor], 
+                                   input_id_mask: List[torch.Tensor],
+                                   mmodal_embeddings_mask: List[torch.Tensor],
+                                   ):
+        if mmodal_embeddings is None:
+            return {}
+
+        if self.remove_input_padding:
+            mmodal_embeddings = torch.concat(mmodal_embeddings).cuda()
+            input_id_mask = torch.concat(input_id_mask).cuda()
+            mmodal_embeddings_mask = torch.concat(mmodal_embeddings_mask).cuda()
+        else:
+            input_lengths = [x.size(0) for x in mmodal_embeddings]
+            max_length = max(input_lengths)
+            hidden_size = mmodal_embeddings[0].size(1)
+            emb_dtype = mmodal_embeddings[0].dtype
+            paddings = [torch.zeros((max_length - l, hidden_size), dtype=emb_dtype) for l in input_lengths]
+            mmodal_embeddings = [torch.cat([x, pad]) for x, pad in zip(mmodal_embeddings, paddings)]
+            mmodal_embeddings = torch.stack(mmodal_embeddings).cuda()
+
+            mask_dtype = mmodal_embeddings_mask[0].dtype
+            mask_padding = [torch.zeros((max_length - l,), dtype=mask_dtype) for l in input_lengths]
+            input_id_mask = [torch.cat([x, pad]) for x, pad in zip(input_id_mask, mask_padding)]
+            input_id_mask = torch.stack(input_id_mask).cuda()
+            mmodal_embeddings_mask = [torch.cat([x, pad]) for x, pad in zip(mmodal_embeddings_mask, mask_padding)]
+            mmodal_embeddings_mask = torch.stack(mmodal_embeddings_mask).cuda()
+
+        return {
+            'mmodal_embeddings': mmodal_embeddings,
+            'input_id_mask': input_id_mask,
+            'mmodal_embeddings_mask': mmodal_embeddings_mask,
+        }
+
+
 class ModelRunner(ModelRunnerMixin):
     """
     An interface class that wraps GenerationSession and provides generation methods.
@@ -436,6 +472,10 @@ class ModelRunner(ModelRunnerMixin):
         num_kv_heads = (num_kv_heads + tp_size - 1) // tp_size
         hidden_size = pretrained_config.hidden_size // tp_size
         head_size = pretrained_config.head_size
+        try:
+            use_mmodal_embeddings = pretrained_config.use_mmodal_embeddings
+        except AttributeError:
+            use_mmodal_embeddings = 0
 
         rnn_config_items = [
             'conv_kernel', 'layer_types', 'rnn_hidden_size', 'state_size',
@@ -482,6 +522,7 @@ class ModelRunner(ModelRunnerMixin):
             use_custom_all_reduce,
             **rnn_configs_kwargs,
             gpu_weights_percent=gpu_weights_percent,
+            use_mmodal_embeddings=use_mmodal_embeddings
         )
         max_batch_size = build_config.max_batch_size
         max_input_len = build_config.max_input_len
@@ -791,6 +832,15 @@ class ModelRunner(ModelRunnerMixin):
         input_lengths = input_lengths.cuda()
         ptuning_kwargs = self._prepare_ptuning(prompt_table, prompt_tasks,
                                                batch_size)
+        #TODO:
+        mmodal_embedding_kwargs = self._prepare_mmodal_embeddings(
+            mmodal_embeddings = kwargs.get('mmodal_embeddings', None),
+            mmodal_embeddings_mask = kwargs.get('mmodal_embeddings_mask', None),
+            input_id_mask = kwargs.get('input_id_mask', None),
+        )
+
+        from loguru import logger
+        
         outputs = self.session.decode(
             batch_input_ids,
             input_lengths,
@@ -802,7 +852,9 @@ class ModelRunner(ModelRunnerMixin):
             streaming=streaming,
             stopping_criteria=stopping_criteria,
             logits_processor=logits_processor,
-            **ptuning_kwargs)
+            **ptuning_kwargs,
+            **mmodal_embedding_kwargs,
+            )
         if sampling_config.return_dict:
             if streaming:
                 outputs = (self._prepare_outputs(curr_outputs, input_lengths)
